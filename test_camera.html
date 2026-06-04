@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>摄像头测试</title>
+    <style>
+        body { font-family: sans-serif; background: #111; color: #fff; padding: 20px; }
+        #log { background: #1a1a1a; padding: 12px; border-radius: 8px; margin: 12px 0; font-size: 13px; line-height: 1.8; max-height: 300px; overflow-y: auto; }
+        .ok { color: #4caf50; }
+        .err { color: #f44336; }
+        .warn { color: #ff9800; }
+        video { width: 640px; max-width: 100%; background: #000; border-radius: 8px; margin: 12px 0; }
+        button { padding: 10px 24px; font-size: 15px; background: #1a73e8; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+        button:hover { background: #1565c0; }
+    </style>
+</head>
+<body>
+    <h2>摄像头诊断测试</h2>
+    <div id="log"></div>
+    <button onclick="runTest()">点击测试摄像头</button>
+    <br>
+    <video id="video" autoplay playsinline></video>
+
+    <script>
+        const logEl = document.getElementById('log');
+        function log(msg, cls) {
+            const div = document.createElement('div');
+            div.className = cls || '';
+            div.textContent = msg;
+            logEl.appendChild(div);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        async function runTest() {
+            logEl.innerHTML = '';
+
+            // Step 1: Secure context
+            log('--- 环境检测 ---');
+            log('协议: ' + location.protocol);
+            log('主机: ' + location.hostname);
+            log('isSecureContext: ' + window.isSecureContext);
+
+            if (!window.isSecureContext) {
+                log('[错误] 不是安全上下文，摄像头无法使用!', 'err');
+                log('必须通过 https:// 或 localhost 访问', 'err');
+                return;
+            }
+            log('[OK] 安全上下文', 'ok');
+
+            // Step 2: mediaDevices
+            log('');
+            log('--- API 检测 ---');
+            log('navigator.mediaDevices: ' + (navigator.mediaDevices ? '存在' : '不存在'));
+            log('navigator.mediaDevices.getUserMedia: ' + (navigator.mediaDevices?.getUserMedia ? '存在' : '不存在'));
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                log('[错误] getUserMedia API 不可用!', 'err');
+                return;
+            }
+            log('[OK] getUserMedia API 可用', 'ok');
+
+            // Step 3: Enumerate devices
+            log('');
+            log('--- 设备检测 ---');
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(d => d.kind === 'videoinput');
+                log('检测到 ' + videoDevices.length + ' 个摄像头:');
+                videoDevices.forEach((d, i) => {
+                    log('  [' + i + '] ' + (d.label || '未命名设备') + ' (' + d.deviceId.substring(0, 12) + '...)');
+                });
+                if (videoDevices.length === 0) {
+                    log('[警告] 未检测到摄像头设备!', 'warn');
+                }
+            } catch (e) {
+                log('[警告] 枚举设备失败: ' + e.message, 'warn');
+            }
+
+            // Step 4: Request camera
+            log('');
+            log('--- 请求摄像头 ---');
+            log('正在调用 getUserMedia...');
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: false
+                });
+                log('[OK] 成功获取摄像头流!', 'ok');
+                log('  视频轨道: ' + stream.getVideoTracks().length);
+                stream.getVideoTracks().forEach(t => {
+                    log('  设备: ' + t.label);
+                    log('  状态: ' + t.readyState);
+                });
+
+                const video = document.getElementById('video');
+                video.srcObject = stream;
+                log('[OK] 视频已附加到 <video> 元素', 'ok');
+
+            } catch (err) {
+                log('[错误] ' + err.name + ': ' + err.message, 'err');
+                if (err.name === 'NotAllowedError') {
+                    log('原因: 用户拒绝了摄像头权限，或浏览器策略阻止', 'err');
+                    log('请检查: 浏览器地址栏右侧是否有摄像头被禁用的图标', 'warn');
+                } else if (err.name === 'NotFoundError') {
+                    log('原因: 未找到摄像头设备', 'err');
+                } else if (err.name === 'NotReadableError') {
+                    log('原因: 摄像头被其他程序占用', 'err');
+                } else if (err.name === 'OverconstrainedError') {
+                    log('原因: 无法满足约束条件', 'err');
+                }
+            }
+        }
+
+        // Auto-run on load
+        log('页面已加载，点击"点击测试摄像头"开始诊断', '');
+    </script>
+</body>
+</html>

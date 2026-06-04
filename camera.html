@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>摄像头交互</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0f0f0f;
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 {
+            margin: 24px 0 8px;
+            font-size: 22px;
+            font-weight: 500;
+            color: #e0e0e0;
+        }
+
+        .status {
+            font-size: 13px;
+            color: #888;
+            margin-bottom: 16px;
+            min-height: 20px;
+        }
+
+        .status.ok { color: #4caf50; }
+        .status.err { color: #f44336; }
+
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 20px;
+            padding: 0 20px 20px;
+            max-width: 1200px;
+            width: 100%;
+        }
+
+        .panel {
+            background: #1a1a1a;
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .panel-title {
+            padding: 12px 16px;
+            font-size: 14px;
+            color: #aaa;
+            width: 100%;
+            text-align: center;
+            border-bottom: 1px solid #2a2a2a;
+        }
+
+        /* Video panel */
+        .video-panel {
+            width: 640px;
+            max-width: 100%;
+        }
+
+        .video-wrapper {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 4/3;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        video, canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        video { display: block; }
+
+        .placeholder {
+            color: #555;
+            font-size: 14px;
+            text-align: center;
+            padding: 20px;
+        }
+
+        /* Filter canvas overlay */
+        #filterCanvas {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: none;
+        }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 12px;
+            justify-content: center;
+            width: 100%;
+        }
+
+        button {
+            background: #2d2d2d;
+            color: #e0e0e0;
+            border: 1px solid #3a3a3a;
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+
+        button:hover { background: #3a3a3a; border-color: #555; }
+        button:active { transform: scale(0.97); }
+        button.primary { background: #1a73e8; border-color: #1a73e8; }
+        button.primary:hover { background: #1565c0; }
+        button.danger { background: #c62828; border-color: #c62828; }
+        button.danger:hover { background: #b71c1c; }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* Snapshot panel */
+        .snapshot-panel {
+            width: 320px;
+            min-height: 300px;
+        }
+
+        .snapshot-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 12px;
+            width: 100%;
+        }
+
+        #snapshot {
+            width: 100%;
+            border-radius: 8px;
+            display: none;
+        }
+
+        .snapshot-placeholder {
+            color: #555;
+            font-size: 13px;
+            text-align: center;
+        }
+
+        .snapshot-actions {
+            display: none;
+            gap: 8px;
+            padding: 8px 12px 12px;
+            width: 100%;
+            justify-content: center;
+        }
+
+        .snapshot-actions.show { display: flex; }
+
+        /* Settings panel */
+        .settings-panel {
+            width: 320px;
+        }
+
+        .settings-content {
+            padding: 12px;
+            width: 100%;
+        }
+
+        .setting-group {
+            margin-bottom: 12px;
+        }
+
+        .setting-group label {
+            display: block;
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 4px;
+        }
+
+        select, input[type="range"] {
+            width: 100%;
+            background: #2d2d2d;
+            color: #e0e0e0;
+            border: 1px solid #3a3a3a;
+            border-radius: 6px;
+            padding: 6px 8px;
+            font-size: 13px;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            height: 6px;
+            border-radius: 3px;
+            background: #3a3a3a;
+            padding: 0;
+            border: none;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #1a73e8;
+            cursor: pointer;
+        }
+
+        .range-value {
+            font-size: 12px;
+            color: #666;
+            text-align: right;
+            margin-top: 2px;
+        }
+
+        /* Fullscreen overlay */
+        .fullscreen-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #000;
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .fullscreen-overlay.show { display: flex; }
+
+        .fullscreen-overlay video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .close-fullscreen {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: #fff;
+            font-size: 24px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: #333;
+            color: #fff;
+            padding: 10px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: transform 0.3s;
+            z-index: 2000;
+        }
+
+        .toast.show { transform: translateX(-50%) translateY(0); }
+
+        /* Record timer */
+        .rec-timer {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: rgba(198, 40, 40, 0.9);
+            color: #fff;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: monospace;
+            display: none;
+        }
+
+        .rec-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #fff;
+            border-radius: 50%;
+            margin-right: 6px;
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* History */
+        .history-panel {
+            width: 100%;
+            max-width: 980px;
+            margin-bottom: 30px;
+        }
+
+        .history-grid {
+            display: flex;
+            gap: 8px;
+            padding: 12px;
+            overflow-x: auto;
+            min-height: 80px;
+            align-items: center;
+        }
+
+        .history-item {
+            width: 100px;
+            height: 75px;
+            border-radius: 6px;
+            overflow: hidden;
+            flex-shrink: 0;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: border-color 0.15s;
+        }
+
+        .history-item:hover { border-color: #1a73e8; }
+
+        .history-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .history-empty {
+            color: #444;
+            font-size: 13px;
+            text-align: center;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="secureWarning" style="display:none; background:#c62828; color:#fff; padding:16px 24px; width:100%; text-align:center; font-size:14px; line-height:1.8;">
+        <strong>无法使用摄像头</strong><br>
+        浏览器要求通过 <b>localhost</b> 或 <b>HTTPS</b> 访问才能调用摄像头。<br>
+        请双击运行桌面上的 <code style="background:rgba(0,0,0,0.3); padding:2px 8px; border-radius:3px;">启动摄像头.bat</code>，或在页面所在目录执行：<br>
+        <code style="background:rgba(0,0,0,0.3); padding:2px 8px; border-radius:3px;">python -m http.server 8080</code>，然后访问 <a href="http://localhost:8080/camera.html" style="color:#fff; text-decoration:underline;">http://localhost:8080/camera.html</a>
+    </div>
+    <h1>摄像头交互工具</h1>
+    <div class="status" id="status">点击"打开摄像头"开始</div>
+
+    <div class="container">
+        <!-- Video panel -->
+        <div class="panel video-panel">
+            <div class="panel-title">实时预览</div>
+            <div class="video-wrapper">
+                <video id="video" autoplay playsinline muted></video>
+                <canvas id="filterCanvas"></canvas>
+                <div class="rec-timer" id="recTimer"><span class="rec-dot"></span><span id="recTime">00:00</span></div>
+                <div class="placeholder" id="videoPlaceholder">摄像头未开启</div>
+            </div>
+            <div class="controls">
+                <button class="primary" id="btnStart" onclick="startCamera()">打开摄像头</button>
+                <button class="danger" id="btnStop" onclick="stopCamera()" disabled>关闭摄像头</button>
+                <button id="btnPhoto" onclick="takePhoto()" disabled>拍照</button>
+                <button id="btnRecord" onclick="toggleRecord()" disabled>开始录像</button>
+                <button id="btnMirror" onclick="toggleMirror()" disabled>镜像翻转</button>
+                <button id="btnFullscreen" onclick="goFullscreen()" disabled>全屏</button>
+                <button id="btnSwitch" onclick="switchCamera()" disabled>切换摄像头</button>
+            </div>
+        </div>
+
+        <!-- Snapshot panel -->
+        <div class="panel snapshot-panel">
+            <div class="panel-title">拍摄结果</div>
+            <div class="snapshot-content">
+                <div class="snapshot-placeholder" id="snapPlaceholder">拍照或录像后在此显示</div>
+                <img id="snapshot" alt="snapshot">
+                <video id="recordPlayback" controls style="display:none; width:100%; border-radius:8px;"></video>
+            </div>
+            <div class="snapshot-actions" id="snapActions">
+                <button onclick="downloadSnap()">下载</button>
+                <button onclick="copySnap()">复制图片</button>
+            </div>
+        </div>
+
+        <!-- Settings panel -->
+        <div class="panel settings-panel">
+            <div class="panel-title">设置 & 滤镜</div>
+            <div class="settings-content">
+                <div class="setting-group">
+                    <label>摄像头</label>
+                    <select id="cameraSelect" onchange="switchToSelected()"></select>
+                </div>
+                <div class="setting-group">
+                    <label>滤镜效果</label>
+                    <select id="filterSelect" onchange="applyFilter()">
+                        <option value="none">无滤镜</option>
+                        <option value="grayscale">黑白</option>
+                        <option value="sepia">复古</option>
+                        <option value="invert">反色</option>
+                        <option value="blur">模糊</option>
+                        <option value="brightness">高亮</option>
+                        <option value="contrast">高对比度</option>
+                        <option value="saturate">高饱和度</option>
+                        <option value="hue-rotate">色相旋转</option>
+                    </select>
+                </div>
+                <div class="setting-group">
+                    <label>亮度</label>
+                    <input type="range" id="brightness" min="0" max="200" value="100" oninput="applyFilter()">
+                    <div class="range-value" id="brightnessVal">100%</div>
+                </div>
+                <div class="setting-group">
+                    <label>对比度</label>
+                    <input type="range" id="contrast" min="0" max="200" value="100" oninput="applyFilter()">
+                    <div class="range-value" id="contrastVal">100%</div>
+                </div>
+                <div class="setting-group">
+                    <label>饱和度</label>
+                    <input type="range" id="saturate" min="0" max="200" value="100" oninput="applyFilter()">
+                    <div class="range-value" id="saturateVal">100%</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- History -->
+    <div class="panel history-panel">
+        <div class="panel-title">拍摄历史</div>
+        <div class="history-grid" id="historyGrid">
+            <div class="history-empty">暂无拍摄记录</div>
+        </div>
+    </div>
+
+    <!-- Fullscreen overlay -->
+    <div class="fullscreen-overlay" id="fullscreenOverlay">
+        <video id="fullscreenVideo" autoplay playsinline muted></video>
+        <button class="close-fullscreen" onclick="exitFullscreen()">&times;</button>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // State
+        let stream = null;
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let isRecording = false;
+        let recordStartTime = 0;
+        let recordTimerInterval = null;
+        let facingMode = 'user';
+        let isMirrored = true;
+        let currentFilter = 'none';
+        let history = [];
+
+        const video = document.getElementById('video');
+        const statusEl = document.getElementById('status');
+        const placeholder = document.getElementById('videoPlaceholder');
+
+        // Check browser support
+        function checkSupport() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                setStatus('浏览器不支持摄像头API，请使用 Chrome/Edge/Firefox/Safari', true);
+                document.getElementById('btnStart').disabled = true;
+                return false;
+            }
+            return true;
+        }
+
+        // 虚拟摄像头关键词
+        const virtualKeywords = ['virtual', 'obs', 'smart connect', '爱思', 'droidcam', 'iriun', 'ip webcam', 'screen', 'vcam', 'xsplit', 'manycam', 'snap camera', 'elgato', 'wirecast', 'vMix', 'camera webcam', 'screen capture', 'display capture'];
+
+        // 判断是否为虚拟摄像头
+        function isVirtualCamera(label) {
+            const lower = label.toLowerCase();
+            return virtualKeywords.some(k => lower.includes(k));
+        }
+
+        // 找到最佳实体摄像头
+        async function findBestCamera() {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const cams = devices.filter(d => d.kind === 'videoinput');
+            console.log('所有摄像头:', cams.map(c => ({ label: c.label, virtual: isVirtualCamera(c.label) })));
+
+            // 优先找实体摄像头（排除虚拟的）
+            const physical = cams.filter(c => !isVirtualCamera(c.label));
+
+            if (physical.length > 0) {
+                console.log('选择实体摄像头:', physical[0].label);
+                return physical[0].deviceId;
+            }
+
+            // 没找到就用第一个
+            console.log('使用默认摄像头:', cams[0]?.label);
+            return cams[0]?.deviceId;
+        }
+
+        // Start camera
+        async function startCamera() {
+            if (!checkSupport()) return;
+
+            try {
+                setStatus('正在请求摄像头权限...');
+                console.log('正在请求摄像头...');
+
+                // 先获取权限（随便选一个），这样 enumerateDevices 才能拿到 label
+                stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                stream.getTracks().forEach(t => t.stop());
+
+                // 现在可以拿到设备名称了，找到最佳摄像头
+                const bestId = await findBestCamera();
+
+                // 用最佳摄像头重新打开
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { deviceId: { exact: bestId } },
+                    audio: false
+                });
+
+                console.log('摄像头获取成功!', stream.getVideoTracks()[0]?.label);
+
+                video.srcObject = stream;
+                placeholder.style.display = 'none';
+                video.style.display = 'block';
+
+                // Apply mirror for front camera
+                if (facingMode === 'user') {
+                    video.style.transform = 'scaleX(-1)';
+                    isMirrored = true;
+                }
+
+                // Enable buttons
+                document.getElementById('btnStart').disabled = true;
+                document.getElementById('btnStop').disabled = false;
+                document.getElementById('btnPhoto').disabled = false;
+                document.getElementById('btnRecord').disabled = false;
+                document.getElementById('btnMirror').disabled = false;
+                document.getElementById('btnFullscreen').disabled = false;
+                document.getElementById('btnSwitch').disabled = false;
+
+                // Populate camera list
+                await populateCameraList();
+
+                const currentLabel = stream.getVideoTracks()[0]?.label || '';
+                const isVirtual = isVirtualCamera(currentLabel);
+                setStatus('摄像头已开启: ' + currentLabel + (isVirtual ? ' [虚拟]' : ' [实体]'), false, !isVirtual);
+                showToast('摄像头已开启' + (isVirtual ? ' (虚拟摄像头)' : ' (实体摄像头)'));
+
+            } catch (err) {
+                console.error('摄像头错误:', err.name, err.message);
+                if (err.name === 'NotAllowedError') {
+                    setStatus('摄像头权限被拒绝 - 请点击地址栏右侧的摄像头图标允许访问', true);
+                } else if (err.name === 'NotFoundError') {
+                    setStatus('未检测到摄像头设备', true);
+                } else if (err.name === 'NotReadableError') {
+                    setStatus('摄像头被其他应用占用，请关闭其他使用摄像头的程序', true);
+                } else {
+                    setStatus('无法访问摄像头: ' + err.name + ' - ' + err.message, true);
+                }
+            }
+        }
+
+        // Stop camera
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(t => t.stop());
+                stream = null;
+            }
+            video.srcObject = null;
+            placeholder.style.display = 'block';
+
+            if (isRecording) toggleRecord();
+
+            document.getElementById('btnStart').disabled = false;
+            document.getElementById('btnStop').disabled = true;
+            document.getElementById('btnPhoto').disabled = true;
+            document.getElementById('btnRecord').disabled = true;
+            document.getElementById('btnMirror').disabled = true;
+            document.getElementById('btnFullscreen').disabled = true;
+            document.getElementById('btnSwitch').disabled = true;
+
+            setStatus('摄像头已关闭');
+            showToast('摄像头已关闭');
+        }
+
+        // Take photo
+        function takePhoto() {
+            if (!stream) return;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+
+            // Apply mirror
+            if (isMirrored) {
+                ctx.translate(canvas.width, 0);
+                ctx.scale(-1, 1);
+            }
+
+            ctx.drawImage(video, 0, 0);
+
+            // Apply CSS filter to canvas
+            if (currentFilter !== 'none') {
+                // Already applied via CSS, but for the captured image we re-draw
+            }
+
+            const dataUrl = canvas.toDataURL('image/png');
+
+            const snapImg = document.getElementById('snapshot');
+            snapImg.src = dataUrl;
+            snapImg.style.display = 'block';
+            document.getElementById('recordPlayback').style.display = 'none';
+            document.getElementById('snapPlaceholder').style.display = 'none';
+            document.getElementById('snapActions').classList.add('show');
+
+            addHistory(dataUrl);
+            showToast('拍照成功');
+        }
+
+        // Toggle recording
+        function toggleRecord() {
+            if (!isRecording) {
+                startRecording();
+            } else {
+                stopRecording();
+            }
+        }
+
+        function startRecording() {
+            recordedChunks = [];
+
+            const options = { mimeType: 'video/webm;codecs=vp9,opus' };
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                options.mimeType = 'video/webm;codecs=vp8,opus';
+                if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                    options.mimeType = 'video/webm';
+                    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                        options.mimeType = '';
+                    }
+                }
+            }
+
+            try {
+                mediaRecorder = new MediaRecorder(stream, options);
+            } catch (e) {
+                mediaRecorder = new MediaRecorder(stream);
+            }
+
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) recordedChunks.push(e.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+
+                const playback = document.getElementById('recordPlayback');
+                playback.src = url;
+                playback.style.display = 'block';
+                document.getElementById('snapshot').style.display = 'none';
+                document.getElementById('snapPlaceholder').style.display = 'none';
+                document.getElementById('snapActions').classList.remove('show');
+
+                showToast('录像已保存');
+            };
+
+            mediaRecorder.start(100);
+            isRecording = true;
+            recordStartTime = Date.now();
+
+            document.getElementById('btnRecord').textContent = '停止录像';
+            document.getElementById('btnRecord').classList.add('danger');
+            document.getElementById('recTimer').style.display = 'block';
+
+            recordTimerInterval = setInterval(updateRecTimer, 1000);
+            showToast('开始录像');
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            isRecording = false;
+            clearInterval(recordTimerInterval);
+
+            document.getElementById('btnRecord').textContent = '开始录像';
+            document.getElementById('btnRecord').classList.remove('danger');
+            document.getElementById('recTimer').style.display = 'none';
+        }
+
+        function updateRecTimer() {
+            const elapsed = Math.floor((Date.now() - recordStartTime) / 1000);
+            const min = String(Math.floor(elapsed / 60)).padStart(2, '0');
+            const sec = String(elapsed % 60).padStart(2, '0');
+            document.getElementById('recTime').textContent = min + ':' + sec;
+        }
+
+        // Mirror
+        function toggleMirror() {
+            isMirrored = !isMirrored;
+            video.style.transform = isMirrored ? 'scaleX(-1)' : 'scaleX(1)';
+            showToast(isMirrored ? '已开启镜像' : '已关闭镜像');
+        }
+
+        // Fullscreen
+        function goFullscreen() {
+            if (!stream) return;
+            const overlay = document.getElementById('fullscreenOverlay');
+            const fsVideo = document.getElementById('fullscreenVideo');
+            fsVideo.srcObject = stream;
+            overlay.classList.add('show');
+        }
+
+        function exitFullscreen() {
+            document.getElementById('fullscreenOverlay').classList.remove('show');
+            document.getElementById('fullscreenVideo').srcObject = null;
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') exitFullscreen();
+        });
+
+        // Switch camera - cycle through cameras
+        async function switchCamera() {
+            const select = document.getElementById('cameraSelect');
+            const options = select.options;
+            if (options.length <= 1) return;
+            const next = (select.selectedIndex + 1) % options.length;
+            select.selectedIndex = next;
+            await switchToSelected();
+        }
+
+        async function switchToSelected() {
+            const select = document.getElementById('cameraSelect');
+            const deviceId = select.value;
+            if (!deviceId || !stream) return;
+
+            stream.getTracks().forEach(t => t.stop());
+
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { deviceId: { exact: deviceId } },
+                    audio: false
+                });
+                video.srcObject = stream;
+                const label = stream.getVideoTracks()[0]?.label || '';
+                const isVirtual = isVirtualCamera(label);
+                setStatus('已切换: ' + label + (isVirtual ? ' [虚拟]' : ' [实体]'), false, !isVirtual);
+                showToast('已切换: ' + label + (isVirtual ? ' (虚拟)' : ' (实体)'));
+            } catch (e) {
+                setStatus('切换摄像头失败: ' + e.message, true);
+            }
+        }
+
+        async function populateCameraList() {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoDevices = devices.filter(d => d.kind === 'videoinput');
+            const select = document.getElementById('cameraSelect');
+            const currentTrack = stream?.getVideoTracks()[0];
+            const currentId = currentTrack?.getSettings().deviceId;
+
+            select.innerHTML = '';
+
+            // 分离实体和虚拟摄像头
+            const physicalCams = videoDevices.filter(d => !isVirtualCamera(d.label));
+            const virtualCams = videoDevices.filter(d => isVirtualCamera(d.label));
+
+            // 添加实体摄像头（优先显示）
+            if (physicalCams.length > 0) {
+                const optgroup = document.createElement('optgroup');
+                optgroup.label = '实体摄像头';
+                physicalCams.forEach((d, i) => {
+                    const opt = document.createElement('option');
+                    opt.value = d.deviceId;
+                    opt.textContent = d.label || '摄像头 ' + (i + 1);
+                    if (d.deviceId === currentId) opt.selected = true;
+                    optgroup.appendChild(opt);
+                });
+                select.appendChild(optgroup);
+            }
+
+            // 添加虚拟摄像头
+            if (virtualCams.length > 0) {
+                const optgroup = document.createElement('optgroup');
+                optgroup.label = '虚拟摄像头';
+                virtualCams.forEach((d, i) => {
+                    const opt = document.createElement('option');
+                    opt.value = d.deviceId;
+                    opt.textContent = d.label || '虚拟摄像头 ' + (i + 1);
+                    if (d.deviceId === currentId) opt.selected = true;
+                    optgroup.appendChild(opt);
+                });
+                select.appendChild(optgroup);
+            }
+
+            // 如果当前没有选中任何设备，默认选择第一个实体摄像头
+            if (!currentId && physicalCams.length > 0) {
+                select.value = physicalCams[0].deviceId;
+            }
+        }
+
+        // Filters
+        function applyFilter() {
+            const filterType = document.getElementById('filterSelect').value;
+            const brightness = document.getElementById('brightness').value;
+            const contrast = document.getElementById('contrast').value;
+            const saturate = document.getElementById('saturate').value;
+
+            document.getElementById('brightnessVal').textContent = brightness + '%';
+            document.getElementById('contrastVal').textContent = contrast + '%';
+            document.getElementById('saturateVal').textContent = saturate + '%';
+
+            let filterStr = '';
+            switch (filterType) {
+                case 'grayscale': filterStr = 'grayscale(100%)'; break;
+                case 'sepia': filterStr = 'sepia(80%)'; break;
+                case 'invert': filterStr = 'invert(100%)'; break;
+                case 'blur': filterStr = 'blur(3px)'; break;
+                case 'brightness': filterStr = 'brightness(150%)'; break;
+                case 'contrast': filterStr = 'contrast(150%)'; break;
+                case 'saturate': filterStr = 'saturate(200%)'; break;
+                case 'hue-rotate': filterStr = 'hue-rotate(90deg)'; break;
+                default: filterStr = '';
+            }
+
+            currentFilter = filterType;
+
+            const cssFilter = `${filterStr} brightness(${brightness}%) contrast(${contrast}%) saturate(${saturate}%)`.trim();
+            video.style.filter = cssFilter;
+        }
+
+        // History
+        function addHistory(dataUrl) {
+            history.unshift(dataUrl);
+            if (history.length > 20) history.pop();
+            renderHistory();
+        }
+
+        function renderHistory() {
+            const grid = document.getElementById('historyGrid');
+            if (history.length === 0) {
+                grid.innerHTML = '<div class="history-empty">暂无拍摄记录</div>';
+                return;
+            }
+            grid.innerHTML = '';
+            history.forEach((url, i) => {
+                const item = document.createElement('div');
+                item.className = 'history-item';
+                item.innerHTML = '<img src="' + url + '" alt="photo ' + (i + 1) + '">';
+                item.onclick = () => {
+                    document.getElementById('snapshot').src = url;
+                    document.getElementById('snapshot').style.display = 'block';
+                    document.getElementById('recordPlayback').style.display = 'none';
+                    document.getElementById('snapPlaceholder').style.display = 'none';
+                    document.getElementById('snapActions').classList.add('show');
+                };
+                grid.appendChild(item);
+            });
+        }
+
+        // Download
+        function downloadSnap() {
+            const snapImg = document.getElementById('snapshot');
+            if (!snapImg.src || snapImg.style.display === 'none') return;
+
+            const a = document.createElement('a');
+            a.href = snapImg.src;
+            a.download = 'photo_' + new Date().toISOString().replace(/[:.]/g, '-') + '.png';
+            a.click();
+            showToast('已下载');
+        }
+
+        // Copy
+        async function copySnap() {
+            const snapImg = document.getElementById('snapshot');
+            if (!snapImg.src) return;
+
+            try {
+                const res = await fetch(snapImg.src);
+                const blob = await res.blob();
+                await navigator.clipboard.write([
+                    new ClipboardItem({ [blob.type]: blob })
+                ]);
+                showToast('已复制到剪贴板');
+            } catch (e) {
+                showToast('复制失败: ' + e.message);
+            }
+        }
+
+        // Helpers
+        function setStatus(msg, isError, isOk) {
+            statusEl.textContent = msg;
+            statusEl.className = 'status' + (isError ? ' err' : (isOk ? ' ok' : ''));
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 2000);
+        }
+
+        // Secure context detection
+        (function() {
+            const isSecure = window.isSecureContext ||
+                             location.hostname === 'localhost' ||
+                             location.hostname === '127.0.0.1';
+            if (!isSecure) {
+                document.getElementById('secureWarning').style.display = 'block';
+                document.getElementById('btnStart').disabled = true;
+                setStatus('需要通过 localhost 访问才能使用摄像头', true);
+            }
+        })();
+
+        // Debug: auto-check environment on load
+        (async function() {
+            console.log('=== 摄像头调试信息 ===');
+            console.log('协议:', location.protocol);
+            console.log('主机:', location.hostname);
+            console.log('isSecureContext:', window.isSecureContext);
+            console.log('mediaDevices:', !!navigator.mediaDevices);
+            console.log('getUserMedia:', !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const cams = devices.filter(d => d.kind === 'videoinput');
+                console.log('摄像头数量:', cams.length);
+                cams.forEach((d, i) => console.log('  摄像头[' + i + ']:', d.label || '未授权'));
+            } catch(e) {
+                console.log('枚举设备失败:', e.message);
+            }
+        })();
+
+        // Init
+        checkSupport();
+    </script>
+</body>
+</html>

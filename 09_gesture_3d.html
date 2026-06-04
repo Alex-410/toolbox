@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>手势控制 3D 模型控制器</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, sans-serif; background: #000; color: #e0e0e0; overflow: hidden; height: 100vh; }
+
+        #threeCanvas { display: block; width: 100%; height: 100%; }
+        video { display: none; }
+
+        .sidebar {
+            position: fixed; top: 0; left: 0; width: 260px; height: 100%;
+            background: rgba(10,10,10,0.9); border-right: 1px solid #222;
+            padding: 16px; overflow-y: auto; z-index: 10;
+            display: flex; flex-direction: column; gap: 12px;
+            backdrop-filter: blur(8px);
+        }
+        .sidebar h2 { font-size: 16px; }
+        .sidebar a { color: #667eea; text-decoration: none; font-size: 13px; }
+
+        .model-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+        .model-btn {
+            padding: 8px; background: #1a1a1a; border: 2px solid #2a2a2a;
+            border-radius: 8px; cursor: pointer; text-align: center;
+            font-size: 11px; color: #aaa; transition: all 0.15s;
+        }
+        .model-btn:hover { border-color: #444; }
+        .model-btn.active { border-color: #667eea; background: #1a1a3a; color: #fff; }
+        .model-btn .icon { font-size: 20px; display: block; margin-bottom: 2px; }
+
+        button {
+            padding: 8px 16px; background: #1e1e1e; border: 1px solid #333;
+            border-radius: 8px; color: #e0e0e0; font-size: 13px; cursor: pointer;
+        }
+        button:hover { background: #2a2a2a; }
+        button.primary { background: #1a73e8; border-color: #1a73e8; }
+
+        .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        .info { background: #1a1a1a; border-radius: 8px; padding: 12px; font-size: 11px; color: #666; line-height: 1.6; }
+
+        .gesture-status {
+            position: fixed; top: 12px; left: 276px;
+            background: rgba(0,0,0,0.7); padding: 8px 16px; border-radius: 8px;
+            font-size: 12px; z-index: 10; display: flex; gap: 16px; align-items: center;
+        }
+        .gesture-item { display: flex; align-items: center; gap: 6px; }
+        .gesture-dot { width: 8px; height: 8px; border-radius: 50%; background: #555; }
+        .gesture-dot.active { background: #4caf50; }
+
+        .hand-preview {
+            position: fixed; bottom: 16px; left: 276px; width: 240px; height: 180px;
+            border-radius: 8px; overflow: hidden; border: 2px solid #333; z-index: 10;
+        }
+        .hand-preview canvas { width: 100%; height: 100%; object-fit: cover; }
+    </style>
+</head>
+<body>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="threeCanvas"></canvas>
+
+    <div class="gesture-status" id="gestureStatus">
+        <div class="gesture-item"><div class="gesture-dot" id="leftDot"></div>左手</div>
+        <div class="gesture-item"><div class="gesture-dot" id="rightDot"></div>右手</div>
+        <div class="gesture-item" style="color:#888;" id="gestureText">等待手势...</div>
+    </div>
+
+    <div class="sidebar">
+        <a href="index.html">&larr; 返回工具集</a>
+        <h2>手势控制 3D 模型</h2>
+
+        <div class="setting-group">
+            <label>选择模型</label>
+            <div class="model-grid" id="modelGrid">
+                <div class="model-btn active" data-model="cube"><span class="icon">🧊</span>方块</div>
+                <div class="model-btn" data-model="sphere"><span class="icon">🔮</span>球体</div>
+                <div class="model-btn" data-model="monkey"><span class="icon">🐵</span>猴头</div>
+                <div class="model-btn" data-model="diamond"><span class="icon">💎</span>钻石</div>
+                <div class="model-btn" data-model="star"><span class="icon">⭐</span>星星</div>
+                <div class="model-btn" data-model="heart"><span class="icon">❤️</span>爱心</div>
+            </div>
+        </div>
+
+        <div id="cameraSelectorContainer"></div>
+
+        <div class="controls">
+            <button id="btnStart" class="primary">开启摄像头</button>
+            <button id="btnReset">重置模型</button>
+        </div>
+
+        <div class="info">
+            <strong>手势操作:</strong><br>
+            ✊ 握拳 = 抓取物体，控制位置<br>
+            ✋ 张开手掌 = 推动方向<br>
+            🤏 捏合 = 缩放物体<br>
+            🤚 左手 = 控制旋转<br>
+            <br>
+            也可以鼠标拖拽/滚轮操作
+        </div>
+    </div>
+
+    <div class="hand-preview" id="handPreview" style="display:none;">
+        <canvas id="handCanvas"></canvas>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@latest/build/three.module.js';
+        import { HandLandmarker, FilesetResolver } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/vision_bundle.mjs';
+        import { initCameraSelector, getSelectedStream } from './camera-selector.js';
+
+        const video = document.getElementById('video');
+        const threeCanvas = document.getElementById('threeCanvas');
+        const handCanvas = document.getElementById('handCanvas');
+        const handCtx = handCanvas.getContext('2d');
+
+        let handLandmarker = null;
+        let stream = null;
+        let scene, camera, renderer, currentMesh;
+        let currentModel = 'cube';
+        let animId = null;
+
+        // Hand state
+        let leftHand = null;
+        let rightHand = null;
+        let isPinching = false;
+        let lastPinchDist = 0;
+        let isGrabbed = false;
+
+        // Model transform
+        let modelPos = new THREE.Vector3(0, 0, 0);
+        let modelRot = new THREE.Euler(0, 0, 0);
+        let modelScale = 1;
+        let modelVel = new THREE.Vector3(0, 0, 0);
+        const DAMPING = 0.88;
+        const MOVE_SPEED = 0.06;
+        const DEADZONE = 0.06;
+
+        handCanvas.width = 240;
+        handCanvas.height = 180;
+
+        function initThree() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 1.5, 4);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setClearColor(0x0a0a0a);
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(3, 5, 3);
+            scene.add(dirLight);
+
+            // Grid
+            const grid = new THREE.GridHelper(10, 10, 0x333333, 0x1a1a1a);
+            scene.add(grid);
+
+            createModel(currentModel);
+        }
+
+        function createModel(type) {
+            if (currentMesh) scene.remove(currentMesh);
+
+            const mat = new THREE.MeshStandardMaterial({
+                color: 0x4caf50,
+                metalness: 0.3,
+                roughness: 0.6
+            });
+
+            let geo;
+            switch (type) {
+                case 'cube':
+                    geo = new THREE.BoxGeometry(1, 1, 1);
+                    break;
+                case 'sphere':
+                    geo = new THREE.SphereGeometry(0.6, 32, 32);
+                    break;
+                case 'monkey':
+                    // Approximate monkey head with sphere + ears
+                    const group = new THREE.Group();
+                    const head = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 32), mat);
+                    group.add(head);
+                    const earL = new THREE.Mesh(new THREE.SphereGeometry(0.18, 16, 16), mat);
+                    earL.position.set(-0.45, 0.25, 0);
+                    group.add(earL);
+                    const earR = earL.clone();
+                    earR.position.x = 0.45;
+                    group.add(earR);
+                    // Nose
+                    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 16), new THREE.MeshStandardMaterial({ color: 0xffcc80 }));
+                    nose.position.set(0, -0.05, 0.45);
+                    group.add(nose);
+                    // Eyes
+                    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x333333 });
+                    const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.06), eyeMat);
+                    eyeL.position.set(-0.18, 0.1, 0.42);
+                    group.add(eyeL);
+                    const eyeR = eyeL.clone();
+                    eyeR.position.x = 0.18;
+                    group.add(eyeR);
+                    currentMesh = group;
+                    currentMesh.position.copy(modelPos);
+                    scene.add(currentMesh);
+                    return;
+                case 'diamond':
+                    geo = new THREE.OctahedronGeometry(0.6);
+                    mat.color = new THREE.Color(0x42a5f5);
+                    mat.metalness = 0.8;
+                    mat.roughness = 0.1;
+                    break;
+                case 'star':
+                    geo = new THREE.IcosahedronGeometry(0.6);
+                    mat.color = new THREE.Color(0xffeb3b);
+                    mat.emissive = new THREE.Color(0x665500);
+                    break;
+                case 'heart':
+                    // Approximate heart shape
+                    const shape = new THREE.Shape();
+                    shape.moveTo(0, 0);
+                    shape.bezierCurveTo(0, -0.3, -0.6, -0.3, -0.6, 0);
+                    shape.bezierCurveTo(-0.6, 0.4, 0, 0.7, 0, 1);
+                    shape.bezierCurveTo(0, 0.7, 0.6, 0.4, 0.6, 0);
+                    shape.bezierCurveTo(0.6, -0.3, 0, -0.3, 0, 0);
+                    geo = new THREE.ExtrudeGeometry(shape, { depth: 0.3, bevelEnabled: true, bevelSize: 0.05 });
+                    mat.color = new THREE.Color(0xe91e63);
+                    break;
+                default:
+                    geo = new THREE.BoxGeometry(1, 1, 1);
+            }
+
+            currentMesh = new THREE.Mesh(geo, mat);
+            currentMesh.position.copy(modelPos);
+            scene.add(currentMesh);
+        }
+
+        async function initHandLandmarker() {
+            const vision = await FilesetResolver.forVisionTasks(
+                'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
+            );
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task',
+                    delegate: 'GPU'
+                },
+                runningMode: 'VIDEO',
+                numHands: 2
+            });
+        }
+
+        const DETECT_INTERVAL = 50;
+        let lastDetectTime = 0;
+        let lastGestureText = '';
+        let lastLeftActive = false;
+        let lastRightActive = false;
+
+        function runHandDetection(now) {
+            if (video.readyState < 2) return;
+
+            let results = null;
+            try {
+                results = handLandmarker.detectForVideo(video, now);
+            } catch (e) {
+                return;
+            }
+
+            handCtx.save();
+            handCtx.translate(240, 0);
+            handCtx.scale(-1, 1);
+            handCtx.drawImage(video, 0, 0, 240, 180);
+            handCtx.restore();
+
+            leftHand = null;
+            rightHand = null;
+
+            if (results && results.handedness && results.handedness.length > 0) {
+                for (let i = 0; i < results.handedness.length; i++) {
+                    const label = results.handedness[i][0].categoryName;
+                    const landmarks = results.landmarks[i];
+
+                    if (label === 'Left') {
+                        leftHand = landmarks;
+                    } else {
+                        rightHand = landmarks;
+                    }
+                    drawHandLandmarks(landmarks);
+                }
+                processGestures();
+            }
+
+            const newLeftActive = leftHand !== null;
+            const newRightActive = rightHand !== null;
+            if (newLeftActive !== lastLeftActive) {
+                document.getElementById('leftDot').classList.toggle('active', newLeftActive);
+                lastLeftActive = newLeftActive;
+            }
+            if (newRightActive !== lastRightActive) {
+                document.getElementById('rightDot').classList.toggle('active', newRightActive);
+                lastRightActive = newRightActive;
+            }
+        }
+
+        function drawHandLandmarks(landmarks) {
+            const connections = [
+                [0,1],[1,2],[2,3],[3,4],
+                [0,5],[5,6],[6,7],[7,8],
+                [0,9],[9,10],[10,11],[11,12],
+                [0,13],[13,14],[14,15],[15,16],
+                [0,17],[17,18],[18,19],[19,20],
+                [5,9],[9,13],[13,17]
+            ];
+
+            handCtx.strokeStyle = '#4caf50';
+            handCtx.lineWidth = 1;
+            for (const [a, b] of connections) {
+                handCtx.beginPath();
+                handCtx.moveTo((1 - landmarks[a].x) * 240, landmarks[a].y * 180);
+                handCtx.lineTo((1 - landmarks[b].x) * 240, landmarks[b].y * 180);
+                handCtx.stroke();
+            }
+
+            for (const lm of landmarks) {
+                handCtx.beginPath();
+                handCtx.arc((1 - lm.x) * 240, lm.y * 180, 2, 0, Math.PI * 2);
+                handCtx.fillStyle = '#fff';
+                handCtx.fill();
+            }
+        }
+
+        function processGestures() {
+            let newGestureText = '等待手势...';
+
+            if (rightHand) {
+                const thumb = rightHand[4];
+                const index = rightHand[8];
+                const middle = rightHand[12];
+                const ring = rightHand[16];
+                const pinky = rightHand[20];
+                const wrist = rightHand[0];
+
+                const pinchDist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
+
+                const openFingers = (
+                    (index.y < rightHand[6].y ? 1 : 0) +
+                    (middle.y < rightHand[10].y ? 1 : 0) +
+                    (ring.y < rightHand[14].y ? 1 : 0) +
+                    (pinky.y < rightHand[18].y ? 1 : 0)
+                );
+
+                if (pinchDist < 0.06 && openFingers <= 1) {
+                    isPinching = true;
+                    if (lastPinchDist > 0) {
+                        const delta = (pinchDist - lastPinchDist) * 8;
+                        modelScale = Math.max(0.3, Math.min(3, modelScale - delta));
+                    }
+                    lastPinchDist = pinchDist;
+                    newGestureText = '🤏 捏合缩放';
+                } else {
+                    isPinching = false;
+                    lastPinchDist = 0;
+                }
+
+                if (openFingers <= 1 && !isPinching) {
+                    isGrabbed = true;
+                    const handX = (0.5 - wrist.x) * 4;
+                    const handY = Math.max(0.2, (0.5 - wrist.y) * 3);
+                    modelPos.x = handX;
+                    modelPos.y = handY;
+                    modelVel.set(0, 0, 0);
+                    newGestureText = '✊ 握拳 - 控制位置';
+                } else if (openFingers >= 3) {
+                    isGrabbed = false;
+                    const palmX = (wrist.x + rightHand[9].x + rightHand[13].x) / 3;
+                    const palmY = (wrist.y + rightHand[9].y + rightHand[13].y) / 3;
+                    const dx = 0.5 - palmX;
+                    const dy = 0.5 - palmY;
+                    if (Math.abs(dx) > DEADZONE) modelVel.x += dx * MOVE_SPEED;
+                    if (Math.abs(dy) > DEADZONE) modelVel.y += dy * MOVE_SPEED;
+                    const avgZ = (index.z + middle.z + ring.z + pinky.z) / 4 - wrist.z;
+                    if (Math.abs(avgZ) > 0.02) modelVel.z += avgZ * MOVE_SPEED * 2;
+                    newGestureText = '✋ 开掌 - 控制方向';
+                }
+            }
+
+            if (leftHand) {
+                const index = leftHand[8];
+                const wrist = leftHand[0];
+                const handAngle = Math.atan2(index.y - wrist.y, index.x - wrist.x);
+                modelRot.x += (handAngle - modelRot.x) * 0.03;
+                newGestureText += ' | 🤚 左手旋转';
+            }
+
+            if (!isGrabbed) {
+                modelPos.x += modelVel.x;
+                modelPos.y += modelVel.y;
+                modelPos.z += modelVel.z;
+                modelVel.multiplyScalar(DAMPING);
+                modelPos.x = Math.max(-3, Math.min(3, modelPos.x));
+                modelPos.y = Math.max(0, Math.min(3, modelPos.y));
+                modelPos.z = Math.max(-2, Math.min(2, modelPos.z));
+            }
+
+            if (newGestureText !== lastGestureText) {
+                document.getElementById('gestureText').textContent = newGestureText;
+                lastGestureText = newGestureText;
+            }
+        }
+
+        function animate() {
+            animId = requestAnimationFrame(animate);
+
+            if (stream && handLandmarker) {
+                const now = performance.now();
+                if (now - lastDetectTime >= DETECT_INTERVAL) {
+                    lastDetectTime = now;
+                    runHandDetection(now);
+                }
+            } else {
+                if (currentMesh) modelRot.y += 0.005;
+                if (!isGrabbed) {
+                    modelVel.multiplyScalar(DAMPING);
+                    modelPos.x += modelVel.x;
+                    modelPos.y += modelVel.y;
+                    modelPos.z += modelVel.z;
+                }
+            }
+
+            if (currentMesh) {
+                currentMesh.position.lerp(modelPos, 0.15);
+                currentMesh.rotation.x += (modelRot.x - currentMesh.rotation.x) * 0.1;
+                currentMesh.rotation.y += (modelRot.y - currentMesh.rotation.y) * 0.1;
+                currentMesh.scale.setScalar(modelScale);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        async function startCamera() {
+            try {
+                stream = await getSelectedStream();
+                video.srcObject = stream;
+
+                await new Promise((resolve, reject) => {
+                    video.onloadedmetadata = () => {
+                        video.play().then(resolve).catch(reject);
+                    };
+                    video.onerror = reject;
+                    setTimeout(() => reject(new Error('视频加载超时')), 10000);
+                });
+
+                if (!handLandmarker) await initHandLandmarker();
+                if (!scene) { initThree(); animate(); }
+
+                document.getElementById('handPreview').style.display = 'block';
+                document.getElementById('btnStart').textContent = '关闭摄像头';
+            } catch (e) {
+                console.error('启动失败:', e);
+            }
+        }
+
+        function stopCamera() {
+            if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+            video.srcObject = null;
+            leftHand = null;
+            rightHand = null;
+            document.getElementById('handPreview').style.display = 'none';
+            document.getElementById('btnStart').textContent = '开启摄像头';
+        }
+
+        // Mouse fallback
+        let isDragging = false, lastMouse = { x: 0, y: 0 };
+        threeCanvas.addEventListener('mousedown', e => { isDragging = true; lastMouse = { x: e.clientX, y: e.clientY }; });
+        threeCanvas.addEventListener('mousemove', e => {
+            if (!isDragging) return;
+            modelRot.y += (e.clientX - lastMouse.x) * 0.01;
+            modelRot.x += (e.clientY - lastMouse.y) * 0.01;
+            lastMouse = { x: e.clientX, y: e.clientY };
+        });
+        threeCanvas.addEventListener('mouseup', () => isDragging = false);
+        threeCanvas.addEventListener('wheel', e => {
+            modelScale = Math.max(0.3, Math.min(3, modelScale - e.deltaY * 0.001));
+        });
+
+        // Events
+        document.getElementById('btnStart').onclick = () => stream ? stopCamera() : startCamera();
+        document.getElementById('btnReset').onclick = () => {
+            modelPos.set(0, 0, 0);
+            modelRot.set(0, 0, 0);
+            modelScale = 1;
+        };
+
+        document.getElementById('modelGrid').onclick = (e) => {
+            const btn = e.target.closest('.model-btn');
+            if (!btn) return;
+            document.querySelectorAll('.model-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentModel = btn.dataset.model;
+            createModel(currentModel);
+        };
+
+        window.addEventListener('resize', () => {
+            if (camera && renderer) {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+        });
+
+        initCameraSelector(document.getElementById('cameraSelectorContainer'), async (deviceId) => {
+            if (stream) {
+                stream.getTracks().forEach(t => t.stop());
+                stream = await getSelectedStream();
+                video.srcObject = stream;
+            }
+        });
+
+        initThree();
+        animate();
+    </script>
+</body>
+</html>

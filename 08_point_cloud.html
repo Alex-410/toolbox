@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>深度图 3D 点云可视化</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, sans-serif; background: #000; color: #e0e0e0; overflow: hidden; height: 100vh; }
+
+        #cloudCanvas { display: block; width: 100%; height: 100%; }
+        video { display: none; }
+
+        .sidebar {
+            position: fixed; top: 0; left: 0; width: 260px; height: 100%;
+            background: rgba(10,10,10,0.9); border-right: 1px solid #222;
+            padding: 16px; overflow-y: auto; z-index: 10;
+            display: flex; flex-direction: column; gap: 12px;
+            backdrop-filter: blur(8px);
+        }
+        .sidebar h2 { font-size: 16px; }
+        .sidebar a { color: #667eea; text-decoration: none; font-size: 13px; }
+
+        button {
+            padding: 8px 16px; background: #1e1e1e; border: 1px solid #333;
+            border-radius: 8px; color: #e0e0e0; font-size: 13px; cursor: pointer;
+        }
+        button:hover { background: #2a2a2a; }
+        button.primary { background: #1a73e8; border-color: #1a73e8; }
+
+        .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        .setting-group { display: flex; flex-direction: column; gap: 4px; }
+        .setting-group label { font-size: 12px; color: #888; }
+        input[type="range"] { -webkit-appearance: none; width: 100%; height: 4px; border-radius: 2px; background: #333; border: none; cursor: pointer; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #667eea; }
+        select { background: #1e1e1e; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; padding: 6px; font-size: 13px; }
+
+        .info { background: #1a1a1a; border-radius: 8px; padding: 12px; font-size: 11px; color: #666; line-height: 1.6; }
+
+        .preview-mini {
+            position: fixed; bottom: 16px; right: 16px; width: 200px; height: 150px;
+            border-radius: 8px; overflow: hidden; border: 2px solid #333; z-index: 10;
+        }
+        .preview-mini canvas { width: 100%; height: 100%; object-fit: cover; }
+    </style>
+</head>
+<body>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="cloudCanvas"></canvas>
+
+    <div class="sidebar">
+        <a href="index.html">&larr; 返回工具集</a>
+        <h2>3D 点云可视化</h2>
+
+        <div class="setting-group">
+            <label>点云密度: <span id="densityVal">128</span></label>
+            <input type="range" id="density" min="32" max="256" value="128" step="16">
+        </div>
+
+        <div class="setting-group">
+            <label>深度缩放: <span id="depthVal">2.0</span></label>
+            <input type="range" id="depthScale" min="10" max="80" value="20">
+        </div>
+
+        <div class="setting-group">
+            <label>点大小: <span id="pointVal">2</span></label>
+            <input type="range" id="pointSize" min="1" max="8" value="2">
+        </div>
+
+        <div class="setting-group">
+            <label>色彩模式</label>
+            <select id="colorMode">
+                <option value="rgb">原始色彩</option>
+                <option value="depth">深度热力图</option>
+                <option value="grayscale">灰度</option>
+                <option value="neon">霓虹</option>
+            </select>
+        </div>
+
+        <div class="setting-group">
+            <label>深度算法</label>
+            <select id="depthAlgo">
+                <option value="luminance">亮度作为深度</option>
+                <option value="edge">边缘检测</option>
+                <option value="center">中心距离</option>
+            </select>
+        </div>
+
+        <div class="setting-group">
+            <label>视图模式</label>
+            <select id="viewMode">
+                <option value="orbit">自由旋转</option>
+                <option value="front">正面</option>
+                <option value="top">俯视</option>
+                <option value="auto">自动旋转</option>
+            </select>
+        </div>
+
+        <div id="cameraSelectorContainer"></div>
+
+        <div class="controls">
+            <button id="btnStart" class="primary">开启摄像头</button>
+            <button id="btnPhoto">拍照</button>
+            <button id="btnExport">导出点云</button>
+        </div>
+
+        <div class="info">
+            <strong>操作说明:</strong><br>
+            - 拖拽旋转视角<br>
+            - 滚轮缩放<br>
+            - 亮度/边缘/中心距离模拟深度
+        </div>
+    </div>
+
+    <div class="preview-mini" id="miniPreview" style="display:none;">
+        <canvas id="previewCanvas"></canvas>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@latest/build/three.module.js';
+        import { initCameraSelector, getSelectedStream } from './camera-selector.js';
+
+        const video = document.getElementById('video');
+        const cloudCanvas = document.getElementById('cloudCanvas');
+        const previewCanvas = document.getElementById('previewCanvas');
+        const previewCtx = previewCanvas.getContext('2d');
+
+        let stream = null;
+        let scene, camera, renderer, pointCloud;
+        let density = 128;
+        let depthScale = 2.0;
+        let pointSize = 2;
+        let animId = null;
+        let points = [];
+
+        // Process canvas
+        const processCanvas = document.createElement('canvas');
+        const processCtx = processCanvas.getContext('2d', { willReadFrequently: true });
+
+        function initThree() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 0, 4);
+
+            renderer = new THREE.WebGLRenderer({ canvas: cloudCanvas, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setClearColor(0x000000);
+
+            // Axes helper
+            const axes = new THREE.AxesHelper(2);
+            axes.material.transparent = true;
+            axes.material.opacity = 0.3;
+            scene.add(axes);
+        }
+
+        function updatePointCloud() {
+            if (!stream || !video.videoWidth) return;
+
+            const w = density;
+            const h = Math.floor(density * video.videoHeight / video.videoWidth);
+            processCanvas.width = w;
+            processCanvas.height = h;
+
+            // Mirror
+            processCtx.save();
+            processCtx.translate(w, 0);
+            processCtx.scale(-1, 1);
+            processCtx.drawImage(video, 0, 0, w, h);
+            processCtx.restore();
+
+            const imageData = processCtx.getImageData(0, 0, w, h);
+            const pixels = imageData.data;
+
+            const colorMode = document.getElementById('colorMode').value;
+            const depthAlgo = document.getElementById('depthAlgo').value;
+
+            // Update preview
+            previewCanvas.width = w;
+            previewCanvas.height = h;
+            previewCtx.putImageData(imageData, 0, 0);
+
+            // Remove old point cloud
+            if (pointCloud) {
+                scene.remove(pointCloud);
+                pointCloud.geometry.dispose();
+                pointCloud.material.dispose();
+            }
+
+            const positions = [];
+            const colors = [];
+            const sizes = [];
+
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const idx = (y * w + x) * 4;
+                    const r = pixels[idx] / 255;
+                    const g = pixels[idx + 1] / 255;
+                    const b = pixels[idx + 2] / 255;
+
+                    // Calculate depth
+                    let depth;
+                    if (depthAlgo === 'luminance') {
+                        depth = (r * 0.299 + g * 0.587 + b * 0.114);
+                    } else if (depthAlgo === 'edge') {
+                        // Simple edge detection
+                        let edgeX = 0, edgeY = 0;
+                        if (x > 0 && x < w - 1) {
+                            const left = (y * w + x - 1) * 4;
+                            const right = (y * w + x + 1) * 4;
+                            edgeX = Math.abs(pixels[idx] - pixels[left]) + Math.abs(pixels[idx] - pixels[right]);
+                        }
+                        if (y > 0 && y < h - 1) {
+                            const up = ((y - 1) * w + x) * 4;
+                            const down = ((y + 1) * w + x) * 4;
+                            edgeY = Math.abs(pixels[idx] - pixels[up]) + Math.abs(pixels[idx] - pixels[down]);
+                        }
+                        depth = Math.min(1, (edgeX + edgeY) / 512);
+                    } else {
+                        // Center distance
+                        const cx = (x / w - 0.5) * 2;
+                        const cy = (y / h - 0.5) * 2;
+                        depth = 1 - Math.sqrt(cx * cx + cy * cy) * 0.5;
+                    }
+
+                    // Position
+                    const px = (x / w - 0.5) * 4;
+                    const py = -(y / h - 0.5) * 4 * (h / w);
+                    const pz = -depth * depthScale;
+
+                    positions.push(px, py, pz);
+
+                    // Color
+                    let cr, cg, cb;
+                    if (colorMode === 'rgb') {
+                        cr = r; cg = g; cb = b;
+                    } else if (colorMode === 'depth') {
+                        // Heatmap
+                        const t = depth;
+                        cr = Math.min(1, t * 2);
+                        cg = Math.min(1, t < 0.5 ? t * 2 : 2 - t * 2);
+                        cb = Math.min(1, (1 - t) * 2);
+                    } else if (colorMode === 'grayscale') {
+                        const gray = depth;
+                        cr = gray; cg = gray; cb = gray;
+                    } else {
+                        // Neon
+                        cr = Math.sin(depth * Math.PI) * 0.5 + 0.5;
+                        cg = Math.sin(depth * Math.PI + 2) * 0.5 + 0.5;
+                        cb = Math.sin(depth * Math.PI + 4) * 0.5 + 0.5;
+                    }
+                    colors.push(cr, cg, cb);
+                    sizes.push(pointSize);
+                }
+            }
+
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+            const material = new THREE.PointsMaterial({
+                size: pointSize / 100,
+                vertexColors: true,
+                sizeAttenuation: true
+            });
+
+            pointCloud = new THREE.Points(geometry, material);
+            scene.add(pointCloud);
+
+            points = positions;
+        }
+
+        function animate() {
+            animId = requestAnimationFrame(animate);
+
+            const viewMode = document.getElementById('viewMode').value;
+            if (viewMode === 'auto') {
+                scene.rotation.y += 0.003;
+            }
+
+            updatePointCloud();
+            renderer.render(scene, camera);
+        }
+
+        // Mouse controls
+        let isDragging = false, lastMouse = { x: 0, y: 0 };
+        cloudCanvas.addEventListener('mousedown', e => { isDragging = true; lastMouse = { x: e.clientX, y: e.clientY }; });
+        cloudCanvas.addEventListener('mousemove', e => {
+            if (!isDragging) return;
+            scene.rotation.y += (e.clientX - lastMouse.x) * 0.005;
+            scene.rotation.x += (e.clientY - lastMouse.y) * 0.005;
+            lastMouse = { x: e.clientX, y: e.clientY };
+        });
+        cloudCanvas.addEventListener('mouseup', () => isDragging = false);
+
+        cloudCanvas.addEventListener('wheel', e => {
+            camera.position.z = Math.max(1, Math.min(10, camera.position.z + e.deltaY * 0.01));
+        });
+
+        async function startCamera() {
+            try {
+                stream = await getSelectedStream();
+                video.srcObject = stream;
+                await video.play();
+
+                if (!scene) {
+                    initThree();
+                    animate();
+                }
+
+                document.getElementById('miniPreview').style.display = 'block';
+                document.getElementById('btnStart').textContent = '关闭摄像头';
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function stopCamera() {
+            if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+            video.srcObject = null;
+            document.getElementById('miniPreview').style.display = 'none';
+            document.getElementById('btnStart').textContent = '开启摄像头';
+        }
+
+        // Events
+        document.getElementById('btnStart').onclick = () => stream ? stopCamera() : startCamera();
+
+        document.getElementById('btnPhoto').onclick = () => {
+            renderer.render(scene, camera);
+            const link = document.createElement('a');
+            link.download = 'pointcloud_' + Date.now() + '.png';
+            link.href = cloudCanvas.toDataURL();
+            link.click();
+        };
+
+        document.getElementById('btnExport').onclick = () => {
+            if (points.length === 0) return;
+            let obj = '# Point Cloud Export\n';
+            for (let i = 0; i < points.length; i += 3) {
+                obj += `v ${points[i].toFixed(4)} ${points[i+1].toFixed(4)} ${points[i+2].toFixed(4)}\n`;
+            }
+            const blob = new Blob([obj], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'pointcloud.obj'; a.click();
+            URL.revokeObjectURL(url);
+        };
+
+        document.getElementById('density').oninput = (e) => {
+            density = parseInt(e.target.value);
+            document.getElementById('densityVal').textContent = density;
+        };
+        document.getElementById('depthScale').oninput = (e) => {
+            depthScale = parseInt(e.target.value) / 10;
+            document.getElementById('depthVal').textContent = depthScale.toFixed(1);
+        };
+        document.getElementById('pointSize').oninput = (e) => {
+            pointSize = parseInt(e.target.value);
+            document.getElementById('pointVal').textContent = pointSize;
+        };
+
+        window.addEventListener('resize', () => {
+            if (camera && renderer) {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+        });
+
+        initCameraSelector(document.getElementById('cameraSelectorContainer'), async (deviceId) => {
+            if (stream) {
+                stream.getTracks().forEach(t => t.stop());
+                stream = await getSelectedStream();
+                video.srcObject = stream;
+            }
+        });
+
+        initThree();
+        animate();
+    </script>
+</body>
+</html>

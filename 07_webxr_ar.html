@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebXR 摄像头 AR 应用</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, sans-serif; background: #000; color: #e0e0e0; overflow: hidden; height: 100vh; }
+
+        #arCanvas { display: block; width: 100%; height: 100%; }
+        video { display: none; }
+
+        .sidebar {
+            position: fixed; top: 0; left: 0; width: 260px; height: 100%;
+            background: rgba(10,10,10,0.9); border-right: 1px solid #222;
+            padding: 16px; overflow-y: auto; z-index: 10;
+            display: flex; flex-direction: column; gap: 12px;
+            backdrop-filter: blur(8px);
+        }
+        .sidebar h2 { font-size: 16px; }
+        .sidebar a { color: #667eea; text-decoration: none; font-size: 13px; }
+
+        .model-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+        .model-btn {
+            padding: 8px; background: #1a1a1a; border: 2px solid #2a2a2a;
+            border-radius: 8px; cursor: pointer; text-align: center;
+            font-size: 11px; color: #aaa; transition: all 0.15s;
+        }
+        .model-btn:hover { border-color: #444; }
+        .model-btn.active { border-color: #667eea; background: #1a1a3a; color: #fff; }
+        .model-btn .icon { font-size: 20px; display: block; margin-bottom: 2px; }
+
+        button {
+            padding: 8px 16px; background: #1e1e1e; border: 1px solid #333;
+            border-radius: 8px; color: #e0e0e0; font-size: 13px; cursor: pointer;
+        }
+        button:hover { background: #2a2a2a; }
+        button.primary { background: #1a73e8; border-color: #1a73e8; }
+
+        .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        .setting-group { display: flex; flex-direction: column; gap: 4px; }
+        .setting-group label { font-size: 12px; color: #888; }
+        input[type="range"] { -webkit-appearance: none; width: 100%; height: 4px; border-radius: 2px; background: #333; border: none; cursor: pointer; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #667eea; }
+        select { background: #1e1e1e; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; padding: 6px; font-size: 13px; }
+
+        .info {
+            background: #1a1a1a; border-radius: 8px; padding: 12px;
+            font-size: 11px; color: #666; line-height: 1.6;
+        }
+
+        .ar-badge {
+            position: fixed; top: 12px; left: 276px;
+            background: rgba(76,175,80,0.8); padding: 6px 16px;
+            border-radius: 20px; font-size: 12px; z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="arCanvas"></canvas>
+
+    <div class="ar-badge" id="arBadge" style="display:none;">AR 模式运行中</div>
+
+    <div class="sidebar">
+        <a href="index.html">&larr; 返回工具集</a>
+        <h2>WebXR AR 应用</h2>
+
+        <div class="setting-group">
+            <label>3D 模型</label>
+            <div class="model-grid" id="modelGrid">
+                <div class="model-btn active" data-model="cube"><span class="icon">🧊</span>方块</div>
+                <div class="model-btn" data-model="sphere"><span class="icon">🔮</span>球体</div>
+                <div class="model-btn" data-model="pyramid"><span class="icon">🔺</span>金字塔</div>
+                <div class="model-btn" data-model="torus"><span class="icon">🍩</span>环面</div>
+                <div class="model-btn" data-model="robot"><span class="icon">🤖</span>机器人</div>
+                <div class="model-btn" data-model="tree"><span class="icon">🌲</span>树木</div>
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <label>模型大小: <span id="scaleVal">1.0</span></label>
+            <input type="range" id="modelScale" min="20" max="300" value="100">
+        </div>
+
+        <div class="setting-group">
+            <label>模型颜色</label>
+            <select id="modelColor">
+                <option value="#4caf50">绿色</option>
+                <option value="#2196f3">蓝色</option>
+                <option value="#f44336">红色</option>
+                <option value="#ffeb3b">黄色</option>
+                <option value="#9c27b0">紫色</option>
+                <option value="#ff9800">橙色</option>
+                <option value="#ffffff">白色</option>
+            </select>
+        </div>
+
+        <div class="setting-group">
+            <label>放置位置</label>
+            <div style="display:flex;gap:6px;">
+                <button id="btnPlaceCenter">中间</button>
+                <button id="btnPlaceLeft">左侧</button>
+                <button id="btnPlaceRight">右侧</button>
+            </div>
+        </div>
+
+        <div id="cameraSelectorContainer"></div>
+
+        <div class="controls">
+            <button id="btnStart" class="primary">开启摄像头</button>
+            <button id="btnPhoto">拍照</button>
+            <button id="btnClear">清除模型</button>
+        </div>
+
+        <div class="info">
+            <strong>操作说明:</strong><br>
+            - 点击画布放置模型<br>
+            - 拖拽旋转视角<br>
+            - 滚轮缩放<br>
+            - 支持 WebXR 的设备可进入沉浸式 AR 模式
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@latest/build/three.module.js';
+        import { initCameraSelector, getSelectedStream } from './camera-selector.js';
+
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('arCanvas');
+
+        let stream = null;
+        let scene, camera, renderer, videoMesh;
+        let currentModel = 'cube';
+        let modelScale = 1.0;
+        let modelColor = '#4caf50';
+        let models = [];
+        let animId = null;
+
+        // Raycaster for click placement
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+
+        function initThree() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 3, 5);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+
+            // Lights
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 5);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            // Ground plane (semi-transparent)
+            const groundGeo = new THREE.PlaneGeometry(20, 20);
+            const groundMat = new THREE.MeshStandardMaterial({
+                color: 0x333333,
+                transparent: true,
+                opacity: 0.3
+            });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // Grid
+            const grid = new THREE.GridHelper(20, 20, 0x444444, 0x222222);
+            grid.material.transparent = true;
+            grid.material.opacity = 0.3;
+            scene.add(grid);
+
+            // Video background
+            createVideoBackground();
+        }
+
+        function createVideoBackground() {
+            const videoTexture = new THREE.VideoTexture(video);
+            videoTexture.minFilter = THREE.LinearFilter;
+
+            const bgGeo = new THREE.PlaneGeometry(16, 9);
+            const bgMat = new THREE.MeshBasicMaterial({ map: videoTexture, side: THREE.DoubleSide });
+            videoMesh = new THREE.Mesh(bgGeo, bgMat);
+            videoMesh.position.set(0, 2, -5);
+            scene.add(videoMesh);
+        }
+
+        function createModel(type, position) {
+            let geometry, material;
+            const color = new THREE.Color(modelColor);
+            const s = modelScale;
+
+            material = new THREE.MeshStandardMaterial({
+                color,
+                metalness: 0.2,
+                roughness: 0.7
+            });
+
+            let group = new THREE.Group();
+
+            switch (type) {
+                case 'cube':
+                    geometry = new THREE.BoxGeometry(s, s, s);
+                    group.add(new THREE.Mesh(geometry, material));
+                    break;
+                case 'sphere':
+                    geometry = new THREE.SphereGeometry(s * 0.5, 32, 32);
+                    group.add(new THREE.Mesh(geometry, material));
+                    break;
+                case 'pyramid':
+                    geometry = new THREE.ConeGeometry(s * 0.5, s, 4);
+                    group.add(new THREE.Mesh(geometry, material));
+                    break;
+                case 'torus':
+                    geometry = new THREE.TorusGeometry(s * 0.4, s * 0.15, 16, 32);
+                    group.add(new THREE.Mesh(geometry, material));
+                    break;
+                case 'robot':
+                    // Body
+                    const body = new THREE.Mesh(new THREE.BoxGeometry(s * 0.6, s * 0.8, s * 0.4), material);
+                    body.position.y = s * 0.4;
+                    group.add(body);
+                    // Head
+                    const head = new THREE.Mesh(new THREE.BoxGeometry(s * 0.4, s * 0.4, s * 0.35), material);
+                    head.position.y = s * 1;
+                    group.add(head);
+                    // Eyes
+                    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+                    const eyeL = new THREE.Mesh(new THREE.SphereGeometry(s * 0.05), eyeMat);
+                    eyeL.position.set(-s * 0.1, s * 1.05, s * 0.18);
+                    group.add(eyeL);
+                    const eyeR = eyeL.clone();
+                    eyeR.position.x = s * 0.1;
+                    group.add(eyeR);
+                    // Arms
+                    const armL = new THREE.Mesh(new THREE.BoxGeometry(s * 0.15, s * 0.6, s * 0.15), material);
+                    armL.position.set(-s * 0.45, s * 0.4, 0);
+                    group.add(armL);
+                    const armR = armL.clone();
+                    armR.position.x = s * 0.45;
+                    group.add(armR);
+                    // Legs
+                    const legL = new THREE.Mesh(new THREE.BoxGeometry(s * 0.2, s * 0.5, s * 0.2), material);
+                    legL.position.set(-s * 0.15, -s * 0.25, 0);
+                    group.add(legL);
+                    const legR = legL.clone();
+                    legR.position.x = s * 0.15;
+                    group.add(legR);
+                    break;
+                case 'tree':
+                    // Trunk
+                    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.08, s * 0.1, s * 0.6), new THREE.MeshStandardMaterial({ color: 0x8d6e63 }));
+                    trunk.position.y = s * 0.3;
+                    group.add(trunk);
+                    // Foliage
+                    const foliage = new THREE.Mesh(new THREE.ConeGeometry(s * 0.4, s * 0.8, 8), material);
+                    foliage.position.y = s * 0.9;
+                    group.add(foliage);
+                    const foliage2 = new THREE.Mesh(new THREE.ConeGeometry(s * 0.3, s * 0.6, 8), material);
+                    foliage2.position.y = s * 1.3;
+                    group.add(foliage2);
+                    break;
+            }
+
+            group.position.copy(position);
+            group.castShadow = true;
+            scene.add(group);
+            models.push(group);
+            return group;
+        }
+
+        function animate() {
+            animId = requestAnimationFrame(animate);
+
+            if (videoMesh && stream) {
+                videoMesh.material.map.needsUpdate = true;
+            }
+
+            // Animate models
+            models.forEach((m, i) => {
+                m.rotation.y += 0.005;
+                m.children.forEach(child => {
+                    if (child.isMesh) child.castShadow = true;
+                });
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        // Click to place
+        canvas.addEventListener('click', (e) => {
+            if (!stream) return;
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersectPoint = new THREE.Vector3();
+            raycaster.ray.intersectPlane(plane, intersectPoint);
+
+            if (intersectPoint) {
+                createModel(currentModel, intersectPoint);
+            }
+        });
+
+        // Drag to rotate camera
+        let isDragging = false, lastMouse = { x: 0, y: 0 };
+        let cameraAngle = 0, cameraHeight = 3;
+
+        canvas.addEventListener('mousedown', e => { isDragging = true; lastMouse = { x: e.clientX, y: e.clientY }; });
+        canvas.addEventListener('mousemove', e => {
+            if (!isDragging) return;
+            cameraAngle -= (e.clientX - lastMouse.x) * 0.005;
+            cameraHeight = Math.max(1, Math.min(10, cameraHeight + (e.clientY - lastMouse.y) * 0.02));
+            camera.position.x = Math.sin(cameraAngle) * 5;
+            camera.position.z = Math.cos(cameraAngle) * 5;
+            camera.position.y = cameraHeight;
+            camera.lookAt(0, 0, 0);
+            lastMouse = { x: e.clientX, y: e.clientY };
+        });
+        canvas.addEventListener('mouseup', () => isDragging = false);
+
+        canvas.addEventListener('wheel', e => {
+            const dist = camera.position.length();
+            const newDist = Math.max(2, Math.min(15, dist + e.deltaY * 0.01));
+            camera.position.normalize().multiplyScalar(newDist);
+        });
+
+        async function startCamera() {
+            try {
+                stream = await getSelectedStream();
+                video.srcObject = stream;
+                await video.play();
+
+                if (!scene) {
+                    initThree();
+                    animate();
+                }
+
+                document.getElementById('arBadge').style.display = 'block';
+                document.getElementById('btnStart').textContent = '关闭摄像头';
+
+                // Place a default model
+                if (models.length === 0) {
+                    createModel('cube', new THREE.Vector3(0, 0.5, 0));
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function stopCamera() {
+            if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+            video.srcObject = null;
+            document.getElementById('arBadge').style.display = 'none';
+            document.getElementById('btnStart').textContent = '开启摄像头';
+        }
+
+        // Events
+        document.getElementById('btnStart').onclick = () => stream ? stopCamera() : startCamera();
+
+        document.getElementById('btnPhoto').onclick = () => {
+            renderer.render(scene, camera);
+            const link = document.createElement('a');
+            link.download = 'ar_' + Date.now() + '.png';
+            link.href = canvas.toDataURL();
+            link.click();
+        };
+
+        document.getElementById('btnClear').onclick = () => {
+            models.forEach(m => scene.remove(m));
+            models = [];
+        };
+
+        document.getElementById('modelGrid').onclick = (e) => {
+            const btn = e.target.closest('.model-btn');
+            if (!btn) return;
+            document.querySelectorAll('.model-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentModel = btn.dataset.model;
+        };
+
+        document.getElementById('modelScale').oninput = (e) => {
+            modelScale = parseInt(e.target.value) / 100;
+            document.getElementById('scaleVal').textContent = modelScale.toFixed(1);
+        };
+
+        document.getElementById('modelColor').onchange = (e) => {
+            modelColor = e.target.value;
+        };
+
+        document.getElementById('btnPlaceCenter').onclick = () => createModel(currentModel, new THREE.Vector3(0, 0.5, 0));
+        document.getElementById('btnPlaceLeft').onclick = () => createModel(currentModel, new THREE.Vector3(-2, 0.5, 0));
+        document.getElementById('btnPlaceRight').onclick = () => createModel(currentModel, new THREE.Vector3(2, 0.5, 0));
+
+        window.addEventListener('resize', () => {
+            if (camera && renderer) {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+        });
+
+        initCameraSelector(document.getElementById('cameraSelectorContainer'), async (deviceId) => {
+            if (stream) {
+                stream.getTracks().forEach(t => t.stop());
+                stream = await getSelectedStream();
+                video.srcObject = stream;
+            }
+        });
+
+        // Init without camera
+        initThree();
+        animate();
+    </script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+# Ignore everything in root
+/*
+!.gitignore
+!README.md
+!frontend
+!backend
+!anime-travel
+
+# ===== Within allowed directories =====
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+
+# Virtual environment
+venv/
+.venv/
+
+# Environment files (API keys)
+.env
+.env.local
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build output
+backend/static/dist/
+
+# RAG data
+backend/rag_data/
